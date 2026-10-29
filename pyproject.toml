@@ -1,0 +1,21 @@
+[project]
+name = "container-resource-optimization"
+version = "0.1.0"
+description = "Container Resource & Replica Optimization using Queueing Theory (Pyomo) and Machine Learning (MLP)"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ipykernel>=7.4.0",
+    "matplotlib>=3.11.2",
+    "nbconvert>=7.17.2",
+    "nbformat>=5.11.1",
+    "numpy>=2.5.4",
+    "pandas>=3.1.0",
+    "pyomo>=6.10.1",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "seaborn>=0.13.2",
+]
+
+[tool.uv]
+package = false

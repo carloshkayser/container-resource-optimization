@@ -571,9 +571,10 @@ def print_optimization_report(result: Dict[str, Any], model_name: str = "MLP") -
     print(f"  RAM Allocation Bounds         : [{ram_lb:.0f}, {ram_ub:.0f}] MB")
     print(f"  Objective Weights (CPU, RAM)  : w_cpu={w_cpu:.2f}, w_ram={w_ram:.2f}")
     print(f"  Feasibility Status            : {result['status']}")
-    print("\n" * 3)
+    print("=" * 72)
 
     # 3. Solution Status Banner
+    print("\n")
     print("*" * 72)
     if result["feasible"]:
         print("  OPTIMAL SOLUTION FOUND")

@@ -235,7 +235,7 @@ def print_solution(
     print(f"  CPU Allocation Bounds         : [{cpu_lb:.0f}, {cpu_ub:.0f}] millicores")
     print(f"  RAM Allocation Bounds         : [{ram_lb:.0f}, {ram_ub:.0f}] MB")
     print(f"  Objective Weights (CPU, RAM)  : w_cpu={w_cpu_val:.2f}, w_ram={w_ram_val:.2f}")
-    print("\n" * 3)
+    print("=" * 72)
 
     # 3. Solution Status Banner
     is_optimal = (
@@ -243,6 +243,8 @@ def print_solution(
         and res.solver.status == pyo.SolverStatus.ok
         and res.solver.termination_condition == pyo.TerminationCondition.optimal
     )
+
+    print("\n")
     print("*" * 72)
     if is_optimal or res is None:
         print("  OPTIMAL SOLUTION FOUND")

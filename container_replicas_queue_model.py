@@ -320,7 +320,7 @@ def print_replicas_solution(
         f"  Multi-Objective Weights           : w_resources={w_res_val:.2f} "
         f"(w_cpu={w_cpu_val:.1f}, w_ram={w_ram_val:.1f}), w_replicas={w_rep_val:.2f}"
     )
-    print("\n" * 3)
+    print("=" * 72)
 
     # 3. Solution Status Banner
     is_optimal = (
@@ -328,6 +328,8 @@ def print_replicas_solution(
         and res.solver.status == pyo.SolverStatus.ok
         and res.solver.termination_condition == pyo.TerminationCondition.optimal
     )
+
+    print("\n")
     print("*" * 72)
     if is_optimal or res is None:
         print("  OPTIMAL SOLUTION FOUND")

@@ -1,183 +1,129 @@
-# Container Resource & Replica Optimization (Queueing Theory & Machine Learning)
+# Container Resource & Replica Optimization: From Queueing Theory to Machine Learning
 
-This directory contains mathematical and data-driven optimization models to right-size containerized workloads (**CPU**, **RAM**, and **Replicas**) under latency Service Level Agreements (**SLA**), comparing analytical **M/M/1 Queueing Theory** against **Machine Learning Surrogate Models**.
-
----
-
-## Overview of the Cases
-
-- **Case 1: Single-Container Resource Optimization (Vertical Scaling)**
-  - **Approach:** Analytical M/M/1 Queueing Theory ($\mu = \alpha \cdot \text{CPU}$, $W = 1 / (\mu - \lambda)$).
-  - **Problem Class:** Linear Programming (LP) / Non-linear Programming (NLP).
-  - **Objectives:** Minimize allocated container resources ($\text{CPU}, \text{RAM}$).
-  - **Script:** [`container_queue_model.py`](./container_queue_model.py)
-  - **Notebook:** [`container_queue_analysis.ipynb`](./container_queue_analysis.ipynb)
-
-- **Case 2: Multi-Objective Container & Replica Optimization (Horizontal + Vertical Scaling)**
-  - **Approach:** Load-Balanced Parallel M/M/1 Queues ($\lambda_{\text{rep}} = \lambda / N$).
-  - **Problem Class:** Multi-Objective Mixed-Integer Linear Programming (MILP) / MINLP.
-  - **Objectives:**
-    - **Objective 1:** Minimize per-container $\text{CPU}$ & $\text{RAM}$.
-    - **Objective 2:** Minimize active container replicas $N \in [1, 5]$.
-  - **Script:** [`container_replicas_queue_model.py`](./container_replicas_queue_model.py)
-  - **Notebook:** [`container_replicas_queue_analysis.ipynb`](./container_replicas_queue_analysis.ipynb)
-
-- **Case 3: Data-Driven Resource Optimization using Machine Learning (ML Surrogate)**
-  - **Approach:** Empirical ML Surrogate Models (Multi-Layer Perceptron / MLP, Random Forest, Ridge) trained on real microservice telemetry to capture non-linear CPU throttling and saturation cliffs.
-  - **Problem Class:** Surrogate-Based Optimization / Non-linear Optimization.
-  - **Objectives:** Minimize container resources while strictly satisfying empirical latency SLAs under real-world runtime behavior.
-  - **Script:** [`container_ml_model.py`](./container_ml_model.py)
-  - **Notebooks:**
-    1. **Iterative Model Training & Architecture Search:** [`container_ml_training.ipynb`](./container_ml_training.ipynb)
-    2. **Surrogate Optimization & Queueing Comparison:** [`container_ml_analysis.ipynb`](./container_ml_analysis.ipynb)
+> **A Three-Part Compendium on Cloud Systems and Mathematical Sizing**  
+> *Theoretical and Practical Optimization of CPU, RAM, and Microservice Replicas under Latency Service Level Agreements (SLAs)*
 
 ---
 
-## Case 1: Single-Container Resource Optimization (Vertical Scaling)
+## Executive Overview
 
-### Problem Description
-We model a single container instance as an **M/M/1 queue** receiving Poisson arrivals at rate $\lambda$ ($\text{req/s}$) and processing requests at rate $\mu = \alpha_{\text{cpu}} \cdot \text{CPU}$ ($\text{req/s}$).
+This repository constitutes a complete, textbook-style technical compendium divided into **three parts**, exploring the progression of resource allocation and autoscaling techniques for containerized workloads in modern Linux cloud environments (Kubernetes, Docker):
 
-### Mathematical Formulation
+```
+                        CONTAINER OPTIMIZATION COMPENDIUM
+                                        │
+      ┌─────────────────────────────────┼─────────────────────────────────┐
+      ▼                                 ▼                                 ▼
+ [ PART 1 ]                        [ PART 2 ]                        [ PART 3 ]
+Part 1: Single-Container           Part 2: Multi-Objective           Part 3: Data-Driven
+Queueing Theory (M/M/1)            Replicas & MILP (Parallel M/M/1)   Machine Learning Surrogates
+      │                                 │                                 │
+  - Closed-form equations           - Load balancer routing           - Real Linux CFS telemetry
+  - Exact linear reformulation      - Horizontal vs. Vertical trade   - CFS quota throttling
+  - Linear Programming (LP)         - Mixed-Integer LP (MILP)         - Neural Networks (MLP)
+      │                                 │                                 │
+Folder: part1/                     Folder: part2/                    Folder: part3/
+```
 
-**Decision Variables:**
-- $\text{CPU} \in [500, 2000]\text{ millicores}$
-- $\text{RAM} \in [128, 4096]\text{ MB}$
-- $\mu \ge 0\text{ req/s}$
-
-**Objective Function:**
-
-$$
-\min_{\text{CPU}, \text{RAM}, \mu} \quad w_{\text{cpu}} \frac{\text{CPU}}{\text{CPU}_{\max}} + w_{\text{ram}} \frac{\text{RAM}}{\text{RAM}_{\max}}
-$$
-
-**Constraints:**
-- **Service Capacity:** $\mu = \alpha_{\text{cpu}} \cdot \text{CPU}$
-- **Memory Provisioning:** $\text{RAM} \ge \text{RAM}_{\text{base}} + \beta_{\text{ram}} \cdot \mu$
-- **M/M/1 Response Time SLA ($W \le W_{\max}$ and $\mu > \lambda$):**
-
-$$
-W = \frac{1}{\mu - \lambda} \le W_{\max} \iff \mu - \lambda \ge \frac{1}{W_{\max}}
-$$
+All 19 high-resolution figures, response surfaces, and empirical charts generated by the models and notebooks are organized and stored in [`assets/`](./assets/):
+- [`assets/part1/`](./assets/part1/): M/M/1 response curves, 2D feasible search spaces, and 3D objective surfaces.
+- [`assets/part2/`](./assets/part2/): Discrete Pareto frontiers, autoscaling trajectories, and cluster overhead phase diagrams.
+- [`assets/part3/`](./assets/part3/): Feature correlations, neural loss convergence curves, 2D latency contours, and the empirical M/M/1 vs. MLP showdown.
 
 ---
 
-## Case 2: Multi-Objective Container & Replica Optimization (Horizontal + Vertical Scaling)
+## Repository Structure and Compendium Parts
 
-### Problem Description
-Case 2 extends Case 1 by allowing the system to add or remove homogeneous container replicas $N \in \{1, 2, 3, 4, 5\}$ behind an even load balancer ($\lambda_{\text{rep}} = \lambda / N$).
+The codebase is organized into **three self-contained directories**, each equipped with its dedicated textbook part (`README.md`), mathematical model scripts (`.py`), interactive Jupyter notebooks (`.ipynb`), datasets, and persisted artifacts:
 
-### Mathematical Formulation (Exact MILP)
-
-**Decision Variables:**
-- $\text{CPU} \in [500, 2000]\text{ mCPU}$ (millicores allocated per container replica)
-- $\text{RAM} \in [128, 4096]\text{ MB}$ (Megabytes allocated per container replica)
-- $N \in \{1, 2, 3, 4, 5\}$ (integer active container replicas)
-- $z_n \in \{0, 1\}$ for $n \in \{1, \dots, 5\}$ (binary indicator: $z_n = 1 \iff N = n$)
-
-**Objective 1 (Per-Container Resources):**
-
-$$
-f_1(\text{CPU}, \text{RAM}) = w_{\text{cpu}} \frac{\text{CPU}}{\text{CPU}_{\max}} + w_{\text{ram}} \frac{\text{RAM}}{\text{RAM}_{\max}}
-$$
-
-**Objective 2 (Number of Replicas):**
-
-$$
-f_2(N) = \frac{N}{N_{\max}}
-$$
-
-**Combined Weighted-Sum Objective:**
-
-$$
-\min_{\text{CPU}, \text{RAM}, N} \quad w_{\text{resources}} \cdot f_1(\text{CPU}, \text{RAM}) + w_{\text{replicas}} \cdot f_2(N)
-$$
-
-**Constraints:**
-- **Replica Selection:** $\sum_{n=1}^{5} z_n = 1, \quad N = \sum_{n=1}^{5} n \cdot z_n$
-- **Exact Linearized Load Balancing:** $\lambda_{\text{rep}} = \sum_{n=1}^{5} \left(\frac{\lambda}{n}\right) z_n$
-- **Per-Replica Service Capacity & RAM:** $\mu = \alpha_{\text{cpu}} \cdot \text{CPU}, \quad \text{RAM} \ge \text{RAM}_{\text{base}} + \beta_{\text{ram}} \cdot \mu$
-- **Per-Replica M/M/1 Latency SLA:** $\mu - \lambda_{\text{rep}} \ge \frac{1}{W_{\max}}$
+### 📘 [Part 1: Single-Container Vertical Scaling via Queueing Theory (M/M/1)](./part1/README.md)
+* **Directory:** [`part1/`](./part1/)
+* **Focus:** Optimal sizing of **CPU** (in millicores) and **RAM** (in Megabytes) for an isolated container instance.
+* **Mathematical Model:** Analytical M/M/1 Queueing Theory with processor-dependent service capacity $\mu = \alpha_{\text{cpu}} \cdot \text{CPU}$ and mean residence time $W = \frac{1}{\mu - \lambda} \le W_{\max}$.
+* **Optimization Formulation:** Proves and implements an exact linear reformulation of the hyperbolic SLA constraint ($\mu - \lambda \ge 1/W_{\max}$), yielding a continuous Linear Program (LP) solved by HiGHS/Pyomo in sub-millisecond time.
+* **Contents:**
+  - 📖 [`part1/README.md`](./part1/README.md): Complete textbook chapter with mathematical proofs, Little's Law derivations, and asymptotic analysis.
+  - 🐍 [`part1/container_queue_model.py`](./part1/container_queue_model.py): Pyomo optimization model (supporting exact LP and raw NLP via Ipopt).
+  - 📓 [`part1/container_queue_analysis.ipynb`](./part1/container_queue_analysis.ipynb): Interactive notebook with 3D cost surfaces, SLA sensitivity curves, and traffic sweeps.
 
 ---
 
-## Case 3: Data-Driven Resource Optimization using Machine Learning (ML Surrogate)
-
-### Problem Description
-Real-world containers running on Linux/Kubernetes experience non-linear phenomenon that analytical M/M/1 models fail to capture:
-- **CFS Bandwidth Throttling:** Linux Completely Fair Scheduler enforces container CPU limits through quotas; once exhausted mid-period, execution halts and latency spikes non-linearly.
-- **Resource Saturation & GC Pressure:** Memory consumption and cache thrashing create performance cliffs.
-- **Payload Heterogeneity:** Heavy I/O or media payloads have radically different response curves than simple HTTP pings.
-
-In Case 3, we use an empirical public benchmark dataset (**UPB Microservices / Nginx Benchmark**) to train regression models that predict response time:
-
-$$
-\hat{W} = f_{\text{ML}}(\text{CPU}, \text{RAM}, \lambda, \text{payload})
-$$
-
-### Case 3 Workflow: Two Dedicated Notebooks
-1. **Iterative Model Training & Architecture Search:** [`container_ml_training.ipynb`](./container_ml_training.ipynb)
-   - Exploratory Data Analysis (EDA) of 1,598 container telemetry measurements.
-   - Target log-transformation $\log(1 + W)$ and feature standardization.
-   - Regularization tuning on Ridge Regression baseline.
-   - Tree ensemble depth & estimator tuning on Random Forest.
-   - Multi-Layer Perceptron (MLP) architecture search (`(32,)`, `(64, 32)`, `(128, 64, 32)`) and training loss convergence curves.
-   - Cross-validation and artifact persistence to `models/`.
-2. **Surrogate Optimization & Queueing Comparison:** [`container_ml_analysis.ipynb`](./container_ml_analysis.ipynb)
-   - 2D Response Surface visualization and contour map of the MLP surrogate.
-   - Solving container sizing $\min \text{Cost}(\text{CPU}, \text{RAM})$ s.t. $\hat{W}_{\text{MLP}} \le W_{\max}$.
-   - SLA sensitivity curve demonstrating exponential cost of tail latency.
-   - Side-by-side comparison showing that analytical M/M/1 severely under-provisions CPU (allocating $100\text{ mCPU}$ leading to $2126\text{ ms}$ latency), while MLP allocates $440\text{ mCPU}$ achieving $490\text{ ms}$ and guaranteeing SLA compliance.
-
-### Optimization Formulation (ML Surrogate)
-
-$$
-\min_{\text{CPU}, \text{RAM}} \quad w_{\text{cpu}} \frac{\text{CPU}}{\text{CPU}_{\max}} + w_{\text{ram}} \frac{\text{RAM}}{\text{RAM}_{\max}}
-$$
-
-$$
-\begin{aligned}
-\text{subject to} \quad & \hat{W}_{\text{MLP}}(\text{CPU}, \text{RAM}, \lambda, \text{payload}) \le W_{\max} \\
-& \text{CPU} \in [100, 1000]\text{ mCPU} \\
-& \text{RAM} \in [64, 512]\text{ MB}
-\end{aligned}
-$$
+### 📘 [Part 2: Joint Horizontal and Vertical Scaling (Parallel M/M/1 Queues & MILP)](./part2/README.md)
+* **Directory:** [`part2/`](./part2/)
+* **Focus:** Simultaneous optimization of **how many container replicas to run ($N \in \{1, \dots, 5\}$)** and **how much hardware to allocate per replica ($\text{CPU}, \text{RAM}$)** behind an HTTP load balancer.
+* **Mathematical Model:** Employs the Poisson Splitting Theorem to model $N$ homogeneous parallel M/M/1 queues receiving load-balanced arrival rates $\lambda_{\text{rep}} = \lambda / N$.
+* **Optimization Formulation:** Formulates a Multi-Objective Mixed-Integer Linear Program (MILP) that exacts a multiple-choice linearization of $\lambda / N$ using binary indicators ($z_n$). Balances per-pod resource footprint against cluster coordination and replica multiplicity costs.
+* **Contents:**
+  - 📖 [`part2/README.md`](./part2/README.md): Complete textbook chapter analyzing scale-up vs. scale-out, the "replica tax" on headroom, and the discrete Pareto front.
+  - 🐍 [`part2/container_replicas_queue_model.py`](./part2/container_replicas_queue_model.py): Pyomo MILP optimization model.
+  - 📓 [`part2/container_replicas_queue_analysis.ipynb`](./part2/container_replicas_queue_analysis.ipynb): Interactive notebook with stacked cost breakdowns, replica sweeps, and aggregate cluster footprint plots.
 
 ---
 
-## Environment Setup & How to Run
+### 📘 [Part 3: Data-Driven Resource Optimization via Machine Learning (ML Surrogates)](./part3/README.md)
+* **Directory:** [`part3/`](./part3/)
+* **Focus:** Overcoming the real-world breakdown of analytical queueing models caused by Linux **CFS Bandwidth Throttling** (`cpu.cfs_quota_us`), memory pressure, Garbage Collection, and payload heterogeneity.
+* **Mathematical Model:** Surrogate-Based Optimization (Metamodeling). Trains non-linear Multi-Layer Perceptrons (MLP), Random Forests, and Ridge regressors on empirical microservice telemetry (UPB / Nginx benchmark) to serve as a high-fidelity constraint oracle:
+  $$\min_{\text{CPU}, \text{RAM}} \quad \text{Cost}(\text{CPU}, \text{RAM}) \quad \text{subject to} \quad \hat{W}_{\text{MLP}}(\text{CPU}, \text{RAM}, \lambda, \text{payload}) \le W_{\max}$$
+* **Core Empirical Finding:** Theoretical M/M/1 severely under-provisions CPU (allocating $100\text{ mCPU}$, producing $2126\text{ ms}$ latency and **violating the $500\text{ ms}$ SLA by 425%** due to Linux CFS throttling), whereas the MLP surrogate allocates $440\text{ mCPU}$, achieving $490\text{ ms}$ and **guaranteeing SLA compliance in production**.
+* **Contents:**
+  - 📖 [`part3/README.md`](./part3/README.md): Complete textbook chapter detailing Linux cgroups scheduling, surrogate optimization theory, and the M/M/1 vs. MLP showdown.
+  - 🐍 [`part3/container_ml_model.py`](./part3/container_ml_model.py): Production training and optimization script.
+  - 📓 [`part3/container_ml_training.ipynb`](./part3/container_ml_training.ipynb): Notebook 1 (EDA, log-transform engineering, neural architecture search, cross-validation).
+  - 📓 [`part3/container_ml_analysis.ipynb`](./part3/container_ml_analysis.ipynb): Notebook 2 (2D response surface visualization, SLA sensitivity curves, M/M/1 vs. MLP showdown).
+  - 📊 [`part3/data/`](./part3/data/): Empirical benchmark telemetry dataset (`container_performance_web1.csv`).
+  - 🧠 [`part3/models/`](./part3/models/): Persisted joblib artifacts (`models.joblib`, `scaler.joblib`, `metrics.joblib`).
 
-Dependencies are managed using **uv** and declared in [`pyproject.toml`](./pyproject.toml).
+---
 
-### 1. Install Dependencies
+## Environment Setup and Execution
+
+Dependencies are managed using **uv** (an ultra-fast Python package and project manager written in Rust).
+
+### 1. Install & Sync Virtual Environment
+From the repository root:
+
 ```bash
 uv sync
 ```
 
-### 2. Run Case 1 (Single Container - M/M/1)
+### 2. Execute Python Scripts
+
+Each script solves the optimization model and can optionally render and save the figures directly to `assets/` by passing `--plot`:
+
 ```bash
-uv run python3 container_queue_model.py
+# Part 1: Single-Container Analytical M/M/1 Optimization (add --plot to save figures)
+uv run python part1/container_queue_model.py --plot
+
+# Part 2: Multi-Objective Parallel M/M/1 Replicas Optimization (add --plot to save figures)
+uv run python part2/container_replicas_queue_model.py --plot
+
+# Part 3: ML Surrogate Optimization & Comparison with M/M/1 (add --plot to save figures)
+uv run python part3/container_ml_model.py --w_max 500 --compare_mm1 --plot
 ```
 
-### 3. Run Case 2 (Multi-Objective Replicas - Parallel M/M/1)
-```bash
-uv run python3 container_replicas_queue_model.py
-```
+### 3. Launch Jupyter Lab for Interactive Notebooks
 
-### 4. Run Case 3 (Data-Driven ML Surrogate Optimization)
-```bash
-# Sizing container with MLP surrogate and comparing against M/M/1
-uv run python3 container_ml_model.py --w_max 500 --compare_mm1
-
-# Retrain models from scratch if desired
-uv run python3 container_ml_model.py --retrain
-```
-
-### 5. Open the Notebooks
 ```bash
 uv run jupyter lab
 ```
-* **Case 1:** [`container_queue_analysis.ipynb`](./container_queue_analysis.ipynb)
-* **Case 2:** [`container_replicas_queue_analysis.ipynb`](./container_replicas_queue_analysis.ipynb)
-* **Case 3 (Training):** [`container_ml_training.ipynb`](./container_ml_training.ipynb)
-* **Case 3 (Optimization):** [`container_ml_analysis.ipynb`](./container_ml_analysis.ipynb)
+
+Navigate to any notebook from the Jupyter file browser:
+- `part1/container_queue_analysis.ipynb`
+- `part2/container_replicas_queue_analysis.ipynb`
+- `part3/container_ml_training.ipynb`
+- `part3/container_ml_analysis.ipynb`
+
+---
+
+## Cross-Part Comparative Synthesis
+
+| Dimension | Part 1: Single M/M/1 Queue | Part 2: Parallel M/M/1 Replicas | Part 3: Machine Learning Surrogate |
+| :--- | :---: | :---: | :---: |
+| **Directory** | `part1/` | `part2/` | `part3/` |
+| **Optimization Variables** | Vertical $\text{CPU}, \text{RAM}$ | Vertical $\text{CPU}, \text{RAM}$ + Horizontal $N$ | Continuous $\text{CPU}, \text{RAM}$ under cgroups |
+| **Foundational Paradigm** | Classical Queueing Theory | Queueing Theory + Integer Programming | Empirical Telemetry + Deep Learning |
+| **Problem Class** | Linear Programming (LP) | Mixed-Integer Linear Programming (MILP) | Non-Linear Black-Box Optimization |
+| **Solver Algorithm** | HiGHS / Simplex / Ipopt | HiGHS (Branch-and-Bound) | Adaptive Grid Search / SLSQP |
+| **Captures CFS Throttling?** | ❌ No (assumes linear capacity) | ❌ No (assumes pure $\lambda/N$ division) | ✅ Yes (learns real Linux kernel behavior) |
+| **Dedicated Textbook** | [Part 1 Textbook](./part1/README.md) | [Part 2 Textbook](./part2/README.md) | [Part 3 Textbook](./part3/README.md) |

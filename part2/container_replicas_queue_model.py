@@ -423,20 +423,159 @@ def print_workload_distribution_table(
     print("-" * 72)
 
 
+def plot_and_save_replicas_model(
+    lambda_req: float = 120.0,
+    w_max: float = 0.05,
+    assets_dir: str | None = None,
+) -> None:
+    """
+    Generates and saves the discrete Pareto front and 3D multi-objective surface
+    for Part 2 into the assets directory.
+    """
+    import os
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    if assets_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        assets_dir = (
+            os.path.join(base_dir, "..", "assets", "part2")
+            if os.path.basename(base_dir) == "part2"
+            else os.path.join(base_dir, "assets", "part2")
+        )
+    os.makedirs(assets_dir, exist_ok=True)
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    pareto_rows = []
+    for n_fixed in range(1, 6):
+        m = build_container_replicas_model(
+            lambda_req=lambda_req,
+            w_max=w_max,
+            replica_bounds=(1, 5),
+            fixed_replicas=n_fixed,
+        )
+        solve_replicas_model(m)
+        pareto_rows.append({
+            "Replicas (N)": n_fixed,
+            "CPU/Container (mCPU)": pyo.value(m.cpu),
+            "RAM/Container (MB)": pyo.value(m.ram),
+            "Combined Obj": pyo.value(m.total_multi_objective_cost),
+        })
+    df_pareto = pd.DataFrame(pareto_rows)
+
+    # 1. Pareto Front
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    ax1 = axes[0]
+    ax1.plot(df_pareto["Replicas (N)"], df_pareto["CPU/Container (mCPU)"], marker="o", markersize=9, lw=2.5, color="#1f77b4", label="Pareto-Optimal Solutions")
+    for _, row in df_pareto.iterrows():
+        ax1.annotate(f"N={int(row['Replicas (N)'])}: {row['CPU/Container (mCPU)']:.0f} mCPU",
+                     xy=(row["Replicas (N)"], row["CPU/Container (mCPU)"]),
+                     xytext=(row["Replicas (N)"] + 0.12, row["CPU/Container (mCPU)"] + 40),
+                     fontsize=8.5, color="#084594")
+    ax1.set_title("Discrete Pareto Frontier: Replicas vs. Per-Container CPU", fontweight="bold")
+    ax1.set_xlabel("Objective 2: Active Replicas (N)", fontweight="bold")
+    ax1.set_ylabel("Per-Container CPU Allocation (mCPU)", color="#1f77b4", fontweight="bold")
+    ax1.set_xticks(range(1, 6))
+    ax1.set_xlim(0.7, 5.8)
+    ax1.grid(True, linestyle="--", alpha=0.6)
+
+    ax2 = axes[1]
+    ax2.plot(df_pareto["Replicas (N)"], df_pareto["Combined Obj"], marker="s", markersize=9, lw=2.5, color="#d62728", label="Total Cost Function $F(CPU, RAM, N)$")
+    opt_row = df_pareto.loc[df_pareto["Combined Obj"].idxmin()]
+    ax2.scatter([opt_row["Replicas (N)"]], [opt_row["Combined Obj"]], color="#2ca02c", s=180, zorder=6, edgecolors="black",
+                label=f"Global Optimum: N={int(opt_row['Replicas (N)'])} (Score: {opt_row['Combined Obj']:.4f})")
+    ax2.set_title("Weighted-Sum Objective Value across Replicas", fontweight="bold")
+    ax2.set_xlabel("Active Replicas (N)", fontweight="bold")
+    ax2.set_ylabel("Combined Objective Score", color="#d62728", fontweight="bold")
+    ax2.set_xticks(range(1, 6))
+    ax2.set_xlim(0.7, 5.8)
+    ax2.legend(loc="upper left", frameon=True)
+    ax2.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    f1_path = os.path.join(assets_dir, "01_pareto_replicas_tradeoff.png")
+    plt.savefig(f1_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 2. 3D Surface
+    cpu_vec = np.linspace(500, 2000, 300)
+    ram_req_vec = 128.0 + 4.0 * (0.08 * cpu_vec)
+    slice_colors = {1: "#d62728", 2: "#2ca02c", 3: "#1f77b4", 4: "#9467bd", 5: "#ff7f0e"}
+
+    fig = plt.figure(figsize=(15.5, 6.4))
+    ax1 = fig.add_subplot(1, 2, 1)
+    for n in range(1, 6):
+        lam_rep_n = lambda_req / n
+        cpu_sla_n = (lam_rep_n + 1.0 / w_max) / 0.08
+        ax1.plot(cpu_vec, ram_req_vec, color=slice_colors[n], lw=1.6, ls="--", alpha=0.55)
+        ax1.fill_between(cpu_vec, ram_req_vec, 1200, where=(cpu_vec >= cpu_sla_n), color=slice_colors[n], alpha=0.10)
+        ax1.axvline(cpu_sla_n, color=slice_colors[n], ls=":", lw=1.6)
+        row_n = df_pareto.loc[df_pareto["Replicas (N)"] == n].iloc[0]
+        marker = "*" if n == 2 else "o"
+        size = 180 if n == 2 else 75
+        ax1.scatter([row_n["CPU/Container (mCPU)"]], [row_n["RAM/Container (MB)"]],
+                    color=slice_colors[n], s=size, marker=marker, zorder=6, edgecolors="black",
+                    label=f"N={n}: {row_n['CPU/Container (mCPU)']:.0f} mCPU")
+    ax1.set_xlim(500, 2000)
+    ax1.set_ylim(128, 900)
+    ax1.set_title("Discrete Slices: Feasible Resource Regions per Replica Count", fontweight="bold")
+    ax1.set_xlabel("Per-Container CPU (millicores)")
+    ax1.set_ylabel("Per-Container RAM (MB)")
+    ax1.legend(loc="upper left", fontsize=8.5, frameon=True)
+
+    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
+    for n in range(1, 6):
+        lam_rep_n = lambda_req / n
+        cpu_sla_n = (lam_rep_n + 1.0 / w_max) / 0.08
+        c_line = np.linspace(cpu_sla_n, 2000, 80)
+        r_line = 128.0 + 0.32 * c_line
+        n_line = np.full_like(c_line, n)
+        obj_line = (c_line / 2000.0) + (r_line / 4096.0) + (n / 5.0)
+        ax2.plot(c_line, n_line, obj_line, color=slice_colors[n], lw=2.4)
+        row_n = df_pareto.loc[df_pareto["Replicas (N)"] == n].iloc[0]
+        opt_obj = row_n["Combined Obj"]
+        marker = "*" if n == 2 else "o"
+        size = 180 if n == 2 else 70
+        ax2.scatter([row_n["CPU/Container (mCPU)"]], [n], [opt_obj], color=slice_colors[n], s=size, marker=marker, edgecolors="black", depthshade=False)
+    ax2.set_title("3D Mixed-Integer Optimization Space: CPU x Replicas x Objective", fontweight="bold")
+    ax2.set_xlabel("CPU (mCPU)")
+    ax2.set_ylabel("Replicas (N)")
+    ax2.set_zlabel("Combined Cost F")
+    ax2.set_yticks(range(1, 6))
+    ax2.view_init(elev=24, azim=-120)
+    plt.tight_layout()
+    f2_path = os.path.join(assets_dir, "04_3d_multiobjective_surface.png")
+    plt.savefig(f2_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    print(f"Generated and saved Part 2 plots to: {assets_dir}")
+
+
 if __name__ == "__main__":
-    # Example: Solve Case 2 for a workload of 120 req/s and compare trade-offs
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Part 2: Multi-Objective Container & Replica Optimization (MILP)")
+    parser.add_argument("--lambda_req", type=float, default=120.0, help="Total arrival rate in req/s (default: 120.0)")
+    parser.add_argument("--w_max", type=float, default=0.05, help="Max mean response time SLA in seconds (default: 0.05)")
+    parser.add_argument("--plot", action="store_true", help="Generate and save Pareto and 3D surface plots to assets/part2/")
+    args = parser.parse_args()
+
+    # Solve Case 2 for specified workload
     replicas_model = build_container_replicas_model(
-        lambda_req=120.0,      # 120 req/s arriving at the load balancer
-        w_max=0.05,            # SLA: mean response time <= 50 ms
-        alpha_cpu=0.08,        # 0.08 req/s per millicore
-        ram_base=128.0,        # 128 MB base RAM per container
-        beta_ram=4.0,          # 4 MB per (req/s) of capacity
+        lambda_req=args.lambda_req,
+        w_max=args.w_max,
+        alpha_cpu=0.08,
+        ram_base=128.0,
+        beta_ram=4.0,
         cpu_bounds=(500.0, 2000.0),
         replica_bounds=(1, 5),
-        w_resources=1.0,       # Weight for Objective 1 (CPU & RAM per container)
-        w_replicas=1.0,        # Weight for Objective 2 (Number of replicas)
+        w_resources=1.0,
+        w_replicas=1.0,
     )
 
     solve_replicas_model(replicas_model)
     print_replicas_solution(replicas_model)
-    print_workload_distribution_table(lambda_req=120.0, w_max=0.05)
+    print_workload_distribution_table(lambda_req=args.lambda_req, w_max=args.w_max)
+
+    if args.plot:
+        plot_and_save_replicas_model(lambda_req=args.lambda_req, w_max=args.w_max)

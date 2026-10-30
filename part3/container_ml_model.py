@@ -655,6 +655,11 @@ def main():
         action="store_true",
         help="Force retraining of models instead of loading saved artifacts",
     )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate and save ML response surface and comparison plots to assets/part3/",
+    )
     args = parser.parse_args()
 
     artifacts = None if args.retrain else load_artifacts()
@@ -711,6 +716,122 @@ def main():
             f"{'SLA Met in Practice?':<30} | {str(comp['mm1_solution']['sla_satisfied_in_reality']):<15} | {str(comp['ml_solution']['feasible']):<15}"
         )
         print("=" * 65)
+
+    if args.plot:
+        plot_and_save_ml_models(
+            model=selected_model,
+            scaler=scaler,
+            opt_result=opt_result,
+            comp_result=comp if args.compare_mm1 else None,
+        )
+
+
+def plot_and_save_ml_models(
+    model: Any,
+    scaler: StandardScaler,
+    opt_result: Dict[str, Any],
+    comp_result: Dict[str, Any] | None = None,
+    assets_dir: str | None = None,
+) -> None:
+    """
+    Generates and saves the 2D latency contour surface, optimal sizing point,
+    and empirical comparison bar chart for Part 3 into the assets directory.
+    """
+    import matplotlib.pyplot as plt
+
+    if assets_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        assets_dir = (
+            os.path.join(base_dir, "..", "assets", "part3")
+            if os.path.basename(base_dir) == "part3"
+            else os.path.join(base_dir, "assets", "part3")
+        )
+    os.makedirs(assets_dir, exist_ok=True)
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    cpu_vals = np.linspace(100, 1000, 60)
+    ram_vals = np.linspace(64, 512, 60)
+    CPU_grid, RAM_grid = np.meshgrid(cpu_vals, ram_vals)
+    pred_latencies = predict_latency(
+        model=model,
+        scaler=scaler,
+        cpu_mcpu=CPU_grid.ravel(),
+        ram_mb=RAM_grid.ravel(),
+        rps=np.full(CPU_grid.size, opt_result.get("lambda_req", 1.0)),
+        is_heavy_payload=np.full(CPU_grid.size, opt_result.get("is_heavy_payload", 1)),
+    ).reshape(CPU_grid.shape)
+
+    # 1. 2D Response Surface
+    plt.figure(figsize=(10, 7))
+    contour = plt.contourf(CPU_grid, RAM_grid, pred_latencies, levels=35, cmap="viridis_r")
+    cbar = plt.colorbar(contour)
+    cbar.set_label("Predicted Latency (ms)", fontweight="bold")
+    sla_lines = plt.contour(CPU_grid, RAM_grid, pred_latencies, levels=[300.0, 500.0, 1000.0], colors=["white", "red", "yellow"], linewidths=2)
+    plt.clabel(sla_lines, inline=True, fmt={300.0: "SLA: 300ms", 500.0: "SLA: 500ms", 1000.0: "SLA: 1000ms"}, fontsize=11)
+    plt.title("MLP Latency Response Surface", fontweight="bold")
+    plt.xlabel("Allocated CPU (mCPU)", fontweight="bold")
+    plt.ylabel("Allocated RAM (MB)", fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(os.path.join(assets_dir, "07_mlp_latency_contour_surface.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 2. Optimal Sizing Contour
+    plt.figure(figsize=(10, 6))
+    contour = plt.contourf(CPU_grid, RAM_grid, pred_latencies, levels=35, cmap="viridis_r")
+    cbar = plt.colorbar(contour)
+    cbar.set_label("Predicted Latency (ms)", fontweight="bold")
+    w_max = opt_result.get("w_max_ms", 500.0)
+    plt.contour(CPU_grid, RAM_grid, pred_latencies, levels=[w_max], colors="red", linewidths=3, linestyles="--")
+    plt.scatter([opt_result["cpu_optimal"]], [opt_result["ram_optimal"]], color="magenta", s=220, marker="*", edgecolors="black", zorder=10,
+                label=f"Optimal Allocation: {opt_result['cpu_optimal']:.0f} mCPU, {opt_result['ram_optimal']:.0f} MB")
+    plt.title(f"Optimal Container Sizing on MLP Response Surface (SLA <= {w_max:.0f}ms)", fontweight="bold")
+    plt.xlabel("Allocated CPU (mCPU)", fontweight="bold")
+    plt.ylabel("Allocated RAM (MB)", fontweight="bold")
+    plt.legend(loc="upper right", frameon=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(assets_dir, "08_optimal_sizing_contour.png"), dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 3. Empirical Showdown Bar Chart (if comparison was made)
+    if comp_result is not None:
+        comparison_table = []
+        for w in [300.0, 400.0, 500.0, 700.0, 1000.0, 1200.0]:
+            comp = compare_ml_vs_queue_model(
+                lambda_req=opt_result.get("lambda_req", 1.0),
+                w_max_ms=w,
+                ml_model=model,
+                scaler=scaler,
+                is_heavy_payload=opt_result.get("is_heavy_payload", 1),
+            )
+            comparison_table.append({
+                "SLA (ms)": w,
+                "MM1 CPU (mCPU)": comp["mm1_solution"]["cpu_mcpu"],
+                "MLP CPU (mCPU)": comp["ml_solution"]["cpu_optimal"],
+                "MM1 Meets SLA?": comp["mm1_solution"]["sla_satisfied_in_reality"],
+            })
+        comp_df = pd.DataFrame(comparison_table)
+
+        fig, ax = plt.subplots(figsize=(11, 6))
+        x = np.arange(len(comp_df))
+        width = 0.35
+        ax.bar(x - width/2, comp_df["MM1 CPU (mCPU)"], width, label="Case 1: M/M/1 Theory", color="coral", edgecolor="black")
+        ax.bar(x + width/2, comp_df["MLP CPU (mCPU)"], width, label="Case 3: MLP Surrogate", color="royalblue", edgecolor="black")
+        ax.set_xlabel("Latency SLA Threshold W_max (ms)", fontweight="bold")
+        ax.set_ylabel("Allocated CPU (mCPU)", fontweight="bold")
+        ax.set_title("Container CPU Sizing: M/M/1 Theory Under-Provisions vs. ML Surrogate", fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{w:.0f} ms" for w in comp_df["SLA (ms)"]])
+        ax.legend(loc="upper right")
+        for i in range(len(comp_df)):
+            violated = not comp_df["MM1 Meets SLA?"].iloc[i]
+            status = "SLA Violated" if violated else "OK"
+            color = "red" if violated else "green"
+            ax.text(x[i] - width/2, comp_df["MM1 CPU (mCPU)"].iloc[i] + 15, status, ha="center", fontsize=9, color=color, fontweight="bold")
+        plt.tight_layout()
+        plt.savefig(os.path.join(assets_dir, "10_mm1_vs_mlp_empirical_showdown.png"), dpi=150, bbox_inches="tight")
+        plt.close()
+
+    print(f"Generated and saved Part 3 plots to: {assets_dir}")
 
 
 if __name__ == "__main__":

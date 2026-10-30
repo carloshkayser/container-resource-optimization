@@ -284,16 +284,114 @@ def print_solution(
     print("=" * 72)
 
 
+def plot_and_save_queue_model(
+    model: pyo.ConcreteModel,
+    assets_dir: str | None = None,
+) -> None:
+    """
+    Generates and saves the analytical queueing plots and search space taxonomy
+    for Part 1 into the assets directory.
+    """
+    import os
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if assets_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        assets_dir = (
+            os.path.join(base_dir, "..", "assets", "part1")
+            if os.path.basename(base_dir) == "part1"
+            else os.path.join(base_dir, "assets", "part1")
+        )
+    os.makedirs(assets_dir, exist_ok=True)
+    plt.style.use("seaborn-v0_8-whitegrid")
+
+    lambda_req = pyo.value(model.lambda_req)
+    alpha_cpu = pyo.value(model.alpha_cpu)
+    w_max = pyo.value(model.w_max)
+    w_max_ms = w_max * 1000.0
+
+    opt_cpu = pyo.value(model.cpu)
+    opt_ram = pyo.value(model.ram)
+    opt_w_ms = pyo.value(model.response_time) * 1000.0
+
+    # 1. Response Time vs CPU
+    cpu_stability = lambda_req / alpha_cpu
+    cpu_vals = np.linspace(cpu_stability + 15, 2000, 400)
+    mu_vals = alpha_cpu * cpu_vals
+    w_total_ms = (1.0 / (mu_vals - lambda_req)) * 1000.0
+    w_queue_ms = (lambda_req / (mu_vals * (mu_vals - lambda_req))) * 1000.0
+    service_time_ms = (1.0 / mu_vals) * 1000.0
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    ax.plot(cpu_vals, w_total_ms, label=r"Total Response Time $W = W_q + 1/\mu$", color="#1f77b4", lw=2.5)
+    ax.plot(cpu_vals, w_queue_ms, label=r"Queue Waiting Time $W_q$", color="#ff7f0e", ls="--", lw=2)
+    ax.plot(cpu_vals, service_time_ms, label=r"Service Time $1/\mu$", color="#2ca02c", ls=":", lw=2)
+    ax.axhline(w_max_ms, color="#d62728", ls="-.", lw=1.8, label=rf"Latency SLA ($W_{{\max}} = {w_max_ms:.0f}$ ms)")
+    ax.axvline(cpu_stability, color="black", ls="--", lw=1.5, label=rf"Stability Limit ($\mu = \lambda \Rightarrow {cpu_stability:.0f}$ mCPU)")
+    ax.axvspan(opt_cpu, 2000, color="#2ca02c", alpha=0.10, label=rf"SLA Feasible Region (CPU $\geq {opt_cpu:.0f}$ mCPU)")
+    ax.scatter([opt_cpu], [opt_w_ms], color="#d62728", s=110, zorder=5, label=f"Optimal Allocation ({opt_cpu:.0f} mCPU, {opt_w_ms:.0f} ms)")
+    ax.set_xlim(500, 2000)
+    ax.set_ylim(0, 200)
+    ax.set_title(rf"M/M/1 Latency vs. Allocated Container CPU ($\lambda = {lambda_req:.0f}$ req/s)", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Allocated CPU (millicores)")
+    ax.set_ylabel("Time (ms)")
+    ax.legend(loc="upper right", frameon=True)
+    plt.tight_layout()
+    f1_path = os.path.join(assets_dir, "01_response_time_vs_cpu.png")
+    plt.savefig(f1_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # 2. Feasible Region & Contours
+    cpu_grid = np.linspace(500, 2000, 300)
+    ram_grid = np.linspace(128, 1200, 300)
+    CPU_M, RAM_M = np.meshgrid(cpu_grid, ram_grid)
+    OBJ = (CPU_M / 2000.0) + (RAM_M / 4096.0)
+    cpu_min_sla = (lambda_req + 1.0 / w_max) / alpha_cpu
+    ram_min_curve = 128.0 + 4.0 * (alpha_cpu * cpu_grid)
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    cs = ax.contour(CPU_M, RAM_M, OBJ, levels=12, cmap="Blues", alpha=0.9, linewidths=1.2)
+    ax.clabel(cs, inline=True, fontsize=8, fmt="Obj: %.2f")
+    ax.fill_between(cpu_grid, ram_min_curve, 1200, where=(cpu_grid >= cpu_min_sla), color="#2ca02c", alpha=0.18, label="Feasible Region (SLA & Constraints Met)")
+    ax.axvline(cpu_min_sla, color="#d62728", lw=2.2, ls="--", label=rf"M/M/1 SLA Boundary (CPU $\geq {cpu_min_sla:.0f}$ mCPU)")
+    ax.plot(cpu_grid, ram_min_curve, color="#9467bd", lw=2.2, label=r"RAM Capacity Constraint ($\mathrm{RAM} \geq 128 + 4\mu$)")
+    ax.scatter([opt_cpu], [opt_ram], color="#d62728", s=130, zorder=6, edgecolors="black", label=f"Optimal Solution ({opt_cpu:.0f} mCPU, {opt_ram:.0f} MB)")
+    ax.set_xlim(500, 2000)
+    ax.set_ylim(128, 1100)
+    ax.set_title("2D Optimization Space: Feasible Region & Objective Contours", fontweight="bold")
+    ax.set_xlabel("Allocated CPU (millicores)")
+    ax.set_ylabel("Allocated RAM (MB)")
+    ax.legend(loc="upper left", frameon=True)
+    plt.tight_layout()
+    f2_path = os.path.join(assets_dir, "04_feasible_region_contours.png")
+    plt.savefig(f2_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    print(f"Generated and saved Part 1 plots to: {assets_dir}")
+
+
 if __name__ == "__main__":
-    # Build and solve the model for a default workload scenario
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Part 1: Single-Container M/M/1 Resource Optimization")
+    parser.add_argument("--lambda_req", type=float, default=50.0, help="Arrival rate in req/s (default: 50.0)")
+    parser.add_argument("--w_max", type=float, default=0.05, help="Max mean response time SLA in seconds (default: 0.05)")
+    parser.add_argument("--plot", action="store_true", help="Generate and save visualization plots to assets/part1/")
+    args = parser.parse_args()
+
+    # Build and solve the model for specified scenario
     container_model = build_container_queue_model(
-        lambda_req=50.0,  # 50 requests/second arriving at the container
-        w_max=0.05,       # SLA: average response time <= 50 ms (0.05 s)
-        alpha_cpu=0.08,   # Each millicore processes 0.08 req/s (1000 mCPU -> 80 req/s)
-        ram_base=128.0,   # 128 MB base memory
-        beta_ram=4.0,     # 4 MB per req/s of service capacity
+        lambda_req=args.lambda_req,
+        w_max=args.w_max,
+        alpha_cpu=0.08,
+        ram_base=128.0,
+        beta_ram=4.0,
         cpu_bounds=(500.0, 2000.0),
     )
 
     solver_results = solve_model(container_model)
     print_solution(container_model, solver_results)
+
+    if args.plot:
+        plot_and_save_queue_model(container_model)

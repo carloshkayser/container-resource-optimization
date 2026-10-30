@@ -229,15 +229,27 @@ $$64\text{ MB} \le \text{RAM} \le 512\text{ MB}$$
 
 ## 6. The Empirical Showdown: Analytical M/M/1 vs. ML Surrogate
 
-This experiment presents the most important finding of this work: **what occurs when a production container is sized using theoretical M/M/1 Queueing Theory versus the data-driven ML surrogate?**
+This experiment illustrates how the bundled fixture is sized by a calibrated M/M/1 model versus the data-driven ML surrogate. It is a model comparison, not a production experiment.
+
+### 6.1 Calibrating the M/M/1 Baseline with Training Data
+
+The M/M/1 baseline is no longer assigned an arbitrary CPU coefficient. Before each comparison, the same cleaned data used to train the surrogate is used to estimate the service-rate coefficient for the selected payload class. For every training observation we invert the M/M/1 residence-time equation:
+
+$$\mu_i = \lambda_i + \frac{1}{W_i}$$
+
+where $W_i$ is converted from milliseconds to seconds. The baseline coefficient is the robust median:
+
+$$\alpha_{\mathrm{CPU}} = \operatorname{median}_i\left(\frac{\mu_i}{\mathrm{CPU}_i}\right), \qquad \mu = \alpha_{\mathrm{CPU}} \cdot \mathrm{CPU}$$
+
+The calibration is performed separately for light and heavy payloads. Using the median prevents a small number of severe latency outliers from dominating the analytical baseline. This is deliberately an *in-sample calibration*: it makes the M/M/1 comparison data-grounded, while the ML model remains necessary to represent RAM effects, CFS discontinuities, and other violations of M/M/1 assumptions.
 
 Test Workload:
 - **Arrival Rate:** $\lambda = 1.0\text{ req/s}$ (heavy compute payload)
 - **Target SLA:** $W_{\max} = 500.00\text{ ms}$
 
-### 6.1 The M/M/1 Illusion and Severe SLA Breaches
+### 6.2 The Remaining M/M/1 Gap and Severe SLA Breaches
 
-Under theoretical M/M/1 formulas:
+Under the telemetry-calibrated M/M/1 formulas:
 - The required throughput is $\mu = \lambda + \frac{1}{W_{\max}} = 1.0 + \frac{1}{0.500} = 3.0\text{ req/s}$.
 - The linear model allocates the absolute minimum allowed CPU floor: **$100\text{ mCPU}$**.
 - The theoretical formula predicts response times well below $15\text{ ms}$.
@@ -248,7 +260,7 @@ However, when $100\text{ mCPU}$ is tested on **real Linux cgroups containers**:
 - **Observed latency spikes to $2,126.85\text{ ms}$!**
 - **The $500\text{ ms}$ SLA is violated by over $425\%$!**
 
-### 6.2 Why the Neural Network Saves the Service
+### 6.3 Why the Neural Network Still Adds Value
 
 The **MLP Surrogate** learned the empirical saturation boundary:
 - It knows that $100\text{ mCPU}$ triggers CFS throttling for this workload.
@@ -309,7 +321,7 @@ Standalone CLI script that can:
 
 ### 8.1 Running via Command Line (Python Script)
 
-Run the optimization using pre-trained MLP models and print the M/M/1 comparison:
+Run the optimization using pre-trained MLP models and print the M/M/1 comparison. The command calibrates its queueing baseline from `--dataset` (the same training data) for the selected `--payload`:
 
 ```bash
 uv run python part3/container_ml_model.py --w_max 500 --compare_mm1

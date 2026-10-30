@@ -24,7 +24,7 @@ the latency SLA under any target workload:
 
 import argparse
 import os
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import joblib
 import numpy as np
@@ -451,13 +451,54 @@ def optimize_container_resources_ml(
 # 5. Queueing Theory (M/M/1) vs ML Comparison
 # =============================================================================
 
+def calibrate_mm1_from_training_data(
+    data: pd.DataFrame,
+    is_heavy_payload: int,
+) -> Dict[str, float | int]:
+    """Calibrate the M/M/1 CPU service-rate coefficient from benchmark data.
+
+    For an M/M/1 queue, ``W = 1 / (mu - lambda)``.  Each telemetry point
+    therefore provides an implied service capacity:
+
+        mu_i = lambda_i + 1 / W_i.
+
+    We fit the simplified analytical baseline ``mu = alpha_cpu * CPU`` using
+    the median of ``mu_i / CPU_i``.  The median makes the calibration less
+    sensitive to the long latency tail that Part 3 is intended to expose.  A
+    separate coefficient is fitted for each payload class, so a heavy-payload
+    comparison is never calibrated from lightweight requests.
+    """
+    if is_heavy_payload not in (0, 1):
+        raise ValueError("is_heavy_payload must be 0 or 1")
+
+    subset = data.loc[data["is_heavy_payload"] == is_heavy_payload].copy()
+    if subset.empty:
+        raise ValueError(
+            f"No training observations available for payload={is_heavy_payload}"
+        )
+
+    latency_s = subset["latency_ms"].to_numpy(dtype=float) / 1000.0
+    implied_mu = subset["rps"].to_numpy(dtype=float) + 1.0 / latency_s
+    alpha_samples = implied_mu / subset["cpu_mcpu"].to_numpy(dtype=float)
+    alpha_cpu = float(np.median(alpha_samples))
+
+    if not np.isfinite(alpha_cpu) or alpha_cpu <= 0:
+        raise ValueError("Could not estimate a positive M/M/1 CPU service rate")
+
+    return {
+        "alpha_cpu_req_per_s_per_mcpu": alpha_cpu,
+        "sample_count": int(len(subset)),
+        "payload": int(is_heavy_payload),
+    }
+
 def compare_ml_vs_queue_model(
     lambda_req: float,
     w_max_ms: float,
     ml_model: Any,
     scaler: StandardScaler,
     is_heavy_payload: int = 1,
-    alpha_cpu: float = 1.0,   # 1 req/s per mCPU for heavy payload
+    mm1_calibration: Optional[Dict[str, float | int]] = None,
+    alpha_cpu: Optional[float] = None,
     ram_base: float = 64.0,
     beta_ram: float = 0.05,
     cpu_bounds: Tuple[float, float] = (100.0, 1000.0),
@@ -467,12 +508,38 @@ def compare_ml_vs_queue_model(
     Compares the resource allocation recommendations between:
       1. Case 1: Analytical M/M/1 Queueing Theory
       2. Case 3: Data-Driven Machine Learning Surrogate (e.g. MLP)
+
+    ``mm1_calibration`` should come from :func:`calibrate_mm1_from_training_data`.
+    ``alpha_cpu`` remains available for an explicit, manually specified
+    analytical scenario; it is otherwise an error to use an uncalibrated
+    M/M/1 coefficient in this Part 3 comparison.
     """
+    if mm1_calibration is not None:
+        calibrated_payload = int(mm1_calibration["payload"])
+        if calibrated_payload != is_heavy_payload:
+            raise ValueError(
+                "M/M/1 calibration payload does not match the comparison payload"
+            )
+        resolved_alpha_cpu = float(mm1_calibration["alpha_cpu_req_per_s_per_mcpu"])
+        calibration_sample_count = int(mm1_calibration["sample_count"])
+        calibration_source = "training dataset"
+    elif alpha_cpu is not None:
+        resolved_alpha_cpu = float(alpha_cpu)
+        calibration_sample_count = 0
+        calibration_source = "manual coefficient"
+    else:
+        raise ValueError(
+            "A calibrated M/M/1 coefficient is required. Pass mm1_calibration "
+            "from calibrate_mm1_from_training_data()."
+        )
+    if not np.isfinite(resolved_alpha_cpu) or resolved_alpha_cpu <= 0:
+        raise ValueError("alpha_cpu must be a positive finite value")
+
     w_max_s = w_max_ms / 1000.0
 
     # 1. Analytical M/M/1 sizing
     mu_min = lambda_req + (1.0 / w_max_s)
-    cpu_mm1 = mu_min / alpha_cpu
+    cpu_mm1 = mu_min / resolved_alpha_cpu
     ram_mm1 = ram_base + beta_ram * mu_min
 
     cpu_min, cpu_max = cpu_bounds
@@ -507,6 +574,12 @@ def compare_ml_vs_queue_model(
         "lambda_req": lambda_req,
         "w_max_ms": w_max_ms,
         "is_heavy_payload": is_heavy_payload,
+        "mm1_calibration": {
+            "source": calibration_source,
+            "alpha_cpu_req_per_s_per_mcpu": resolved_alpha_cpu,
+            "sample_count": calibration_sample_count,
+            "payload": is_heavy_payload,
+        },
         "mm1_solution": {
             "feasible": mm1_feasible,
             "cpu_mcpu": round(float(cpu_mm1_clamped), 1),
@@ -648,7 +721,7 @@ def main():
     parser.add_argument(
         "--compare_mm1",
         action="store_true",
-        help="Compare ML sizing against M/M/1 Queueing Theory",
+        help="Compare ML sizing against M/M/1 calibrated from the training dataset",
     )
     parser.add_argument(
         "--retrain",
@@ -691,16 +764,28 @@ def main():
     print_optimization_report(opt_result, model_name=args.model.upper())
 
     if args.compare_mm1:
+        training_data, _, _ = load_and_preprocess_dataset(args.dataset)
+        mm1_calibration = calibrate_mm1_from_training_data(
+            training_data, args.payload
+        )
         comp = compare_ml_vs_queue_model(
             lambda_req=args.lambda_req,
             w_max_ms=args.w_max,
             ml_model=selected_model,
             scaler=scaler,
             is_heavy_payload=args.payload,
+            mm1_calibration=mm1_calibration,
         )
         print("\n" + "=" * 65)
-        print("   COMPARISON: CASE 1 (M/M/1 Queue) vs CASE 3 (ML Surrogate)")
+        print("   COMPARISON: CALIBRATED M/M/1 QUEUE vs ML SURROGATE")
         print("=" * 65)
+        print(
+            "M/M/1 calibration: "
+            f"alpha={comp['mm1_calibration']['alpha_cpu_req_per_s_per_mcpu']:.4f} "
+            "req/s per mCPU "
+            f"({comp['mm1_calibration']['sample_count']} training samples, "
+            f"payload={args.payload})"
+        )
         print(f"{'Metric':<30} | {'M/M/1 Queueing':<15} | {'ML Surrogate (MLP)':<15}")
         print("-" * 65)
         print(
@@ -723,6 +808,7 @@ def main():
             scaler=scaler,
             opt_result=opt_result,
             comp_result=comp if args.compare_mm1 else None,
+            mm1_calibration=mm1_calibration if args.compare_mm1 else None,
         )
 
 
@@ -731,6 +817,7 @@ def plot_and_save_ml_models(
     scaler: StandardScaler,
     opt_result: Dict[str, Any],
     comp_result: Dict[str, Any] | None = None,
+    mm1_calibration: Optional[Dict[str, float | int]] = None,
     assets_dir: str | None = None,
 ) -> None:
     """
@@ -802,6 +889,7 @@ def plot_and_save_ml_models(
                 ml_model=model,
                 scaler=scaler,
                 is_heavy_payload=opt_result.get("is_heavy_payload", 1),
+                mm1_calibration=mm1_calibration,
             )
             comparison_table.append({
                 "SLA (ms)": w,
